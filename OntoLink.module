@@ -1,0 +1,122 @@
+<?php
+
+/**
+ * ProcessWire 'OntoLink' module
+ *
+ * The module automatically creates references and hyperlinks between field content and pages.
+ *
+ */
+
+class OntoLink extends WireData implements Module {
+  public static function getModuleInfo() {
+    return array(
+      'title' => 'Autolink to Ontology',
+      'version' => 1,
+      'summary' => 'Replaces {name} marks with {name|ID} on content save. Also provides support to replace {name|ID} marks with links on page display.',
+      'href' => 'https://processwire.com',
+      'singular' => true, // contains hooks
+      'autoload' => true, // attaches to hooks
+      'icon' => 'link', // fontawesome icon
+    );
+  }
+
+  public function init() {
+    $this->pages->addHookAfter('Pages::saveReady', $this, 'ontolink_check_fields');
+  }
+
+/*
+ * Hook that replaces {name} with {name|ID} in the specified fields on page save.
+ */
+  public function ontolink_check_fields($event) {
+    $page = $event->arguments[0];
+    foreach ($this->fields as $field) {
+      if (!$page->hasField($field)) continue;   // has no such field
+      if (trim($page->$field) == '') continue;  // empty field
+      // debug only $this->message("Checking {$field} for {$this->ontotype} autolinks.");
+      $replaced = $this->ontolink_insert_refs($page->$field, $this->ontotype, $field);
+      if ($replaced != NULL) $page->$field = $replaced;
+    }
+    // $page will be saved after the hook returns
+  }
+
+/*
+ * User callable function to replace {name|ID} text with hyperlinks in the specifield fields.
+ * @param $page reference to the page object to be modified.
+ * You can use this function in page templates this way:
+   if ($modules->isInstalled('OntoLink')) {
+     $modules->OntoLink->ontolink_insert_links($page); // will alter the $page object
+   }
+ */
+  public function ontolink_insert_links(&$page) {
+    foreach ($this->fields as $field) {
+      if (!$page->hasField($field)) continue;   // has no such field
+      if (trim($page->$field) == '') continue;  // empty field
+      //$this->message("Checking {$field} for {$this->ontotype} autolinks.");
+      $replaced = $this->ontolink_replace_refs_with_links($page->$field);
+
+      if ($replaced != NULL) $page->$field = $replaced;
+    }
+  }
+
+
+  private function ontolink_insert_refs($text, $template, $field) {
+    preg_match_all('/{([^}|]+)}/', $text, $matches, PREG_SET_ORDER);
+    $nrfound = count($matches);
+    if ($nrfound == 0) return $text;
+
+    // debug only $this->message("Found {$nrfound} references to '{$template}' in field '{$field}'.");
+    foreach ($matches as $match) {
+      $names = wire()->pages->find('template='.$template.', title='.$match[1]);
+      if (count($names) < 1) {
+        $names = wire()->pages->find('template='.$template.', known_as~='.$match[1]);
+        if (count($names) < 1) {
+          $names = wire()->pages->find('template='.$template.', title*='.$match[1]);
+          if (count($names) < 1) {
+            $names = wire()->pages->find('template='.$template.', known_as*='.$match[1]);
+            if (count($names) < 1) {
+              $this->message('No reference found for '.$match[1].' to a '.$template.'.');
+              continue;
+            }
+          }
+        }
+      }
+
+      if (count($names) > 1) {
+        $msgs = array();
+        foreach ($names as $name) {
+          if ($name->editable()) {
+            $msgs[] = '<a href="'.$name->editUrl().'" target="_blank">'.$name->title.'</a>';
+          } else {
+            $msgs[] = $name->title;
+          }
+        }
+        $this->message("Could not assign '{$template}' record to '{$match[1]}'<br />Possible candidates are: ".implode(" | ", $msgs), Notice::allowMarkup);
+        continue;
+      }
+
+      $this->message("Found '{$match[0]}' as a reference to '{$names[0]->title}' in field '{$field}'.");
+      $tr = preg_replace('/{('.$match[1].')}/', '{$1|'.$names[0]->id.'}', $text);
+      if ($tr == NULL) {
+        $this->message("Failed to replace {$match[0]} as #{$names[0]->id}.");
+      } else {
+        $text = $tr;
+        $replaced++;
+      }
+    }
+    if ($replaced > 0) {
+      // debug only $this->message("Added {$replaced} '{$template}' references(s) to field '{$field}'.");
+    }
+    return $text;
+  }
+
+
+  private function ontolink_replace_refs_with_links($text) {
+    preg_match_all('/{([^}|]+)\|([0-9]+)}/', $text, $matches, PREG_SET_ORDER);
+    if (count($matches) < 1) return $text;
+    foreach ($matches as $match) {
+      $text = preg_replace('/{('.$match[1].')\|([0-9]+)}/', '<a href="'.$this->wire('pages')->get($match[2])->url.'">$1</a>', $text);
+    }
+    return $text;
+  }
+}
+?>
